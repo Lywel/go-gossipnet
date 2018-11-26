@@ -16,6 +16,7 @@ type ConnCloseEvent struct {
 // DataEvent is emitted when data is received from the network
 type DataEvent struct {
 	Data []byte
+	Addr string
 }
 
 // ListenEvent is emitted when the node starts to listen

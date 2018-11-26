@@ -85,7 +85,10 @@ func (n *Node) handleData(addr string, payload []byte) {
 	n.knownMessages.Add(hash, true)
 
 	n.Gossip(payload)
-	n.emit(DataEvent{payload})
+	n.emit(DataEvent{
+		Data: payload,
+		Addr: addr,
+	})
 }
 
 func (n *Node) cacheEventFor(addr string, hash [32]byte) (alreadyKnew bool) {
