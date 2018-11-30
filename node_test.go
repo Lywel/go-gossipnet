@@ -1,11 +1,12 @@
 package gossipnet_test
 
 import (
-	"bytes"
 	"bitbucket.org/ventureslash/go-gossipnet"
+	"bytes"
 	"net"
 	"sync"
 	"testing"
+	"time"
 )
 
 func TestNew(t *testing.T) {
@@ -42,38 +43,115 @@ func (netMan) IsInteressted(net.Addr) bool {
 
 func TestBroadcast(t *testing.T) {
 	var local, remote *gossipnet.Node
-	localAddr := "127.0.0.1:3000"
-	local = gossipnet.New(localAddr, []string{})
-	remote = gossipnet.New("127.0.0.1:3001", []string{":3000"})
+	localAddr := ":3000"
+	remoteAddr := ":3001"
+	ref := []byte("This is a test")
 
+	// two nodes
+	local = gossipnet.New(localAddr, []string{})
+	remote = gossipnet.New(remoteAddr, []string{localAddr})
+
+	// Start the first one
 	if err := local.Start(); err != nil {
 		t.Fatal(err)
 	}
 	defer local.Stop()
 
-	ref := []byte("This is a test")
-
+	// wait for it to be ready
+	listenCh := make(chan struct{})
+	// Read local events
 	go func() {
-		if err := remote.Start(); err != nil {
-			t.Fatal(err)
+		defer close(listenCh)
+		for {
+			e := <-local.EventChan()
+			switch e.(type) {
+			case gossipnet.ListenEvent:
+				return
+			default:
+			}
 		}
-		defer remote.Stop()
+	}()
+	// wait for listenEvent or timeout
+	select {
+	case <-listenCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("local node start() timed out")
+	}
 
-		remote.Broadcast(ref)
+	// Local node is istening
+	// Start the second one
+	if err := remote.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer remote.Stop()
+
+	// wait for the 2 connections notifications
+	wg := sync.WaitGroup{}
+	wg.Add(2)
+	connectedCh := make(chan struct{})
+	// Read local events
+	go func() {
+		defer wg.Done()
+		for {
+			e := <-local.EventChan()
+			switch e.(type) {
+			case gossipnet.ConnOpenEvent:
+				return
+			default:
+			}
+		}
+	}()
+	// Read remote events
+	go func() {
+		defer wg.Done()
+		for {
+			e := <-local.EventChan()
+			switch e.(type) {
+			case gossipnet.ConnOpenEvent:
+				return
+			default:
+			}
+		}
+	}()
+	// Wait for both
+	go func() {
+		defer close(connectedCh)
+		wg.Wait()
 	}()
 
-	event := <-local.EventChan()
-	switch event.(type) {
-	case gossipnet.DataEvent:
-		dataEvent := event.(gossipnet.DataEvent)
-		if bytes.Compare(dataEvent.Data, ref) != 0 {
-			t.Fatal("received msg expected to be '" + string(ref) + "' but got '" + string(dataEvent.Data) + "' instead.")
+	// wait for listenEvent or timeout
+	select {
+	case <-connectedCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("connection timed out")
+	}
+
+	// Nodes are connected
+	// Let's start listening for messges
+	receivedCh := make(chan struct{})
+	// Read local events
+	go func() {
+		defer close(receivedCh)
+		for {
+			e := <-local.EventChan()
+			switch ev := e.(type) {
+			case gossipnet.DataEvent:
+				if bytes.Compare(ev.Data, ref) != 0 {
+					t.Fatal("received msg expected to be '" + string(ref) + "' but got '" + string(ev.Data) + "' instead.")
+				}
+				return
+			default:
+			}
 		}
-	case gossipnet.ListenEvent:
-		listenEvent := event.(gossipnet.ListenEvent)
-		if listenEvent.Addr != localAddr {
-			t.Fatal("listening addr expected to be '" + string(localAddr) + "' but got '" + string(listenEvent.Addr) + "' instead.")
-		}
-	default:
+	}()
+
+	// Send data to remote->local
+	remote.Broadcast(ref)
+
+	// wait for data to be received or timeout
+	select {
+	case <-receivedCh:
+	case <-time.After(100 * time.Millisecond):
+		t.Fatal("local receive timed out")
 	}
 }

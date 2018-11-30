@@ -3,8 +3,11 @@ package gossipnet
 import (
 	"bufio"
 	"crypto/sha256"
+	"flag"
+	"github.com/google/logger"
 	"github.com/hashicorp/golang-lru"
 	"io"
+	"io/ioutil"
 	"net"
 )
 
@@ -13,6 +16,8 @@ const (
 	inmemoryMessages       = 1024
 	eventChannelBufferSize = 256
 )
+
+var verbose = flag.Bool("verbose-network", false, "print gossipnet info level logs")
 
 // Node is the local Node
 type Node struct {
@@ -24,6 +29,7 @@ type Node struct {
 	eventChan      chan Event
 	recentMessages *lru.ARCCache // the cache of peer's messages
 	knownMessages  *lru.ARCCache // the cache of self messages
+	debug          *logger.Logger
 }
 
 // New Creates a Network Gossiping Node
@@ -52,6 +58,7 @@ func (n *Node) emit(event Event) {
 
 // Save the new remote node
 func (n *Node) registerRemote(conn net.Conn) {
+	n.debug.Infof("Connection opened with %s", conn.RemoteAddr())
 	n.remoteNodes[conn.RemoteAddr()] = conn
 	n.emit(ConnOpenEvent{conn.RemoteAddr().String()})
 	defer conn.Close()
@@ -72,10 +79,12 @@ func (n *Node) registerRemote(conn net.Conn) {
 		}
 		break
 	}
+	n.debug.Infof("Connection closed with %s", conn.RemoteAddr())
 	n.emit(ConnCloseEvent{conn.RemoteAddr().String()})
 }
 
 func (n *Node) handleData(addr string, payload []byte) {
+	n.debug.Infof("Receiving data from %s", addr)
 	hash := sha256.Sum256(payload)
 	n.cacheEventFor(addr, hash)
 
@@ -112,12 +121,15 @@ func (n *Node) EventChan() <-chan Event {
 
 // Gossip sends a Message to all peers passing selection (except self)
 func (n *Node) Gossip(payload []byte) {
+	n.debug.Infof("Gossip")
 	hash := sha256.Sum256(payload)
 	payload = append(payload, '\n')
 
 	for addr, conn := range n.remoteNodes {
 		alreadyKnew := n.cacheEventFor(addr.String(), hash)
+		n.debug.Infof("Skipping %s", addr)
 		if !alreadyKnew {
+			n.debug.Infof("Gossiping to %s", addr)
 			conn.Write(payload)
 		}
 	}
@@ -125,6 +137,7 @@ func (n *Node) Gossip(payload []byte) {
 
 // Broadcast sends a Message to all peers passing selection (including self)
 func (n *Node) Broadcast(payload []byte) {
+	n.debug.Infof("Broadcast")
 	n.Gossip(payload)
 	n.handleData(n.localAddr, payload)
 }
@@ -132,11 +145,16 @@ func (n *Node) Broadcast(payload []byte) {
 // Start starts the node (client / server)
 func (n *Node) Start() error {
 	n.running = true
+	n.debug = logger.Init("Gossipnet", *verbose, false, ioutil.Discard)
+	n.debug.Infof("Start")
 
+	n.debug.Infof("Dialing peers")
 	for _, addr := range n.remoteAddrs {
+		n.debug.Infof("Dialing %s...", addr)
 		conn, err := net.Dial("tcp", addr)
 		if err != nil {
 			n.emit(ErrorEvent{err})
+			n.debug.Warningf("Dialing %s failed: %v", addr, err)
 			continue
 		}
 		go n.registerRemote(conn)
@@ -146,6 +164,7 @@ func (n *Node) Start() error {
 	if n.ln, err = net.Listen("tcp", n.localAddr); err != nil {
 		return err
 	}
+	n.debug.Infof("Starting to listen on %s", n.localAddr)
 	n.emit(ListenEvent{n.ln.Addr().String()})
 
 	go func() {
@@ -153,9 +172,11 @@ func (n *Node) Start() error {
 		for n.running {
 			conn, err := n.ln.Accept()
 			if err != nil {
+				n.debug.Infof("Accept error: %v", err)
 				n.emit(ErrorEvent{err})
 				continue
 			}
+			n.debug.Infof("Accepting new connection from %s", conn)
 			go n.registerRemote(conn)
 		}
 	}()
@@ -168,7 +189,9 @@ func (n *Node) Stop() {
 	if !n.running {
 		return
 	}
+	n.debug.Infof("Stop")
 	n.running = false
+	n.debug.Close()
 	n.ln.Close()
 	for _, conn := range n.remoteNodes {
 		conn.Close()
