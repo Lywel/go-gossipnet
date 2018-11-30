@@ -99,11 +99,11 @@ func (n *Node) registerRemote(conn net.Conn) {
 		payload, err := n.readNextMessage(conn)
 		switch err {
 		case nil:
-			n.handleData(conn.RemoteAddr().String(), payload[:len(payload)-1])
+			n.handleData(conn.RemoteAddr().String(), payload)
 			continue
 		case io.EOF:
 		default:
-			n.debug.Warning("read error on %s: %v", conn.RemoteAddr(), err)
+			n.debug.Warningf("read error on %s: %v", conn.RemoteAddr(), err)
 			n.emit(ErrorEvent{err})
 		}
 		break

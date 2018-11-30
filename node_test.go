@@ -4,6 +4,7 @@ import (
 	"bitbucket.org/ventureslash/go-gossipnet"
 	"bytes"
 	"net"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -64,6 +65,7 @@ func TestBroadcast(t *testing.T) {
 		defer close(listenCh)
 		for {
 			e := <-local.EventChan()
+			t.Logf("local (ListenEvent)" + reflect.TypeOf(e).String())
 			switch e.(type) {
 			case gossipnet.ListenEvent:
 				return
@@ -79,11 +81,6 @@ func TestBroadcast(t *testing.T) {
 	}
 
 	// Local node is istening
-	// Start the second one
-	if err := remote.Start(); err != nil {
-		t.Fatal(err)
-	}
-	defer remote.Stop()
 
 	// wait for the 2 connections notifications
 	wg := sync.WaitGroup{}
@@ -94,6 +91,7 @@ func TestBroadcast(t *testing.T) {
 		defer wg.Done()
 		for {
 			e := <-local.EventChan()
+			t.Logf("read local (ConnOpenEvent)" + reflect.TypeOf(e).String())
 			switch e.(type) {
 			case gossipnet.ConnOpenEvent:
 				return
@@ -105,7 +103,8 @@ func TestBroadcast(t *testing.T) {
 	go func() {
 		defer wg.Done()
 		for {
-			e := <-local.EventChan()
+			e := <-remote.EventChan()
+			t.Logf("read remote (ConnOpenEvent)" + reflect.TypeOf(e).String())
 			switch e.(type) {
 			case gossipnet.ConnOpenEvent:
 				return
@@ -119,10 +118,16 @@ func TestBroadcast(t *testing.T) {
 		wg.Wait()
 	}()
 
+	// Start the second one
+	if err := remote.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer remote.Stop()
+
 	// wait for listenEvent or timeout
 	select {
 	case <-connectedCh:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(1000 * time.Millisecond):
 		t.Fatal("connection timed out")
 	}
 
@@ -151,7 +156,7 @@ func TestBroadcast(t *testing.T) {
 	// wait for data to be received or timeout
 	select {
 	case <-receivedCh:
-	case <-time.After(100 * time.Millisecond):
+	case <-time.After(1000 * time.Millisecond):
 		t.Fatal("local receive timed out")
 	}
 }
