@@ -2,7 +2,9 @@ package gossipnet
 
 import (
 	"bufio"
+	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"flag"
 	"github.com/google/logger"
 	"github.com/hashicorp/golang-lru"
@@ -56,6 +58,34 @@ func (n *Node) emit(event Event) {
 	}
 }
 
+func (n *Node) readNextMessage(conn net.Conn) ([]byte, error) {
+	buf := bytes.Buffer{}
+	tmp := make([]byte, 256)
+
+	// Read message len
+	for buf.Len() < 4 {
+		n, err := conn.Read(tmp)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(tmp[:n])
+	}
+
+	// Parse 4 first byte to get the message length
+	messageLength := binary.LittleEndian.Uint32(buf.Bytes()[:4])
+	n.debug.Infof("receiving message of len %d", messageLength)
+
+	for buf.Len() < int(messageLength+4) {
+		n, err := conn.Read(tmp)
+		if err != nil {
+			return nil, err
+		}
+		buf.Write(tmp[:n])
+	}
+
+	return buf.Bytes()[4:], nil
+}
+
 // Save the new remote node
 func (n *Node) registerRemote(conn net.Conn) {
 	n.debug.Infof("Connection opened with %s", conn.RemoteAddr())
@@ -65,16 +95,16 @@ func (n *Node) registerRemote(conn net.Conn) {
 	defer delete(n.remoteNodes, conn.RemoteAddr())
 
 	// Start reading
-	buf := bufio.NewReader(conn)
 
 	for {
-		payload, err := buf.ReadBytes('\n')
+		payload, err := n.readNextMessage(conn)
 		switch err {
 		case nil:
 			n.handleData(conn.RemoteAddr().String(), payload[:len(payload)-1])
 			continue
 		case io.EOF:
 		default:
+			n.debug.Warning("read error on %s: %v", conn.RemoteAddr(), err)
 			n.emit(ErrorEvent{err})
 		}
 		break
@@ -123,13 +153,16 @@ func (n *Node) EventChan() <-chan Event {
 func (n *Node) Gossip(payload []byte) {
 	n.debug.Infof("Gossip")
 	hash := sha256.Sum256(payload)
-	payload = append(payload, '\n')
+
+	payloadLen := make([]byte, 4)
+	binary.LittleEndian.PutUint32(payloadLen, uint32(len(payload)))
 
 	for addr, conn := range n.remoteNodes {
 		alreadyKnew := n.cacheEventFor(addr.String(), hash)
 		n.debug.Infof("Skipping %s", addr)
 		if !alreadyKnew {
 			n.debug.Infof("Gossiping to %s", addr)
+			conn.Write(payloadLen)
 			conn.Write(payload)
 		}
 	}
