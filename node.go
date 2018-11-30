@@ -1,7 +1,6 @@
 package gossipnet
 
 import (
-	"bufio"
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
