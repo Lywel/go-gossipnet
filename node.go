@@ -158,11 +158,12 @@ func (n *Node) Gossip(payload []byte) {
 
 	for addr, conn := range n.remoteNodes {
 		alreadyKnew := n.cacheEventFor(addr.String(), hash)
-		n.debug.Infof("Skipping %s", addr)
 		if !alreadyKnew {
 			n.debug.Infof("Gossiping to %s", addr)
 			conn.Write(payloadLen)
 			conn.Write(payload)
+		} else {
+			n.debug.Infof("%s already knew :o", addr)
 		}
 	}
 }
@@ -208,7 +209,7 @@ func (n *Node) Start() error {
 				n.emit(ErrorEvent{err})
 				continue
 			}
-			n.debug.Infof("Accepting new connection from %s", conn)
+			n.debug.Infof("Accepting connection from %s", conn.RemoteAddr())
 			go n.registerRemote(conn)
 		}
 	}()
