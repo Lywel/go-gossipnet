@@ -57,15 +57,18 @@ func (n *Node) emit(event Event) {
 	}
 }
 
-func (n *Node) readNextMessage(conn net.Conn) ([]byte, error) {
+func (n *Node) readNextMessage(conn net.Conn, rest []byte) ([]byte, []byte, error) {
 	buf := bytes.Buffer{}
 	tmp := make([]byte, 256)
+
+	// Reinsert rest from previous read
+	buf.Write(rest)
 
 	// Read message len
 	for buf.Len() < 4 {
 		n, err := conn.Read(tmp)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		buf.Write(tmp[:n])
 	}
@@ -77,12 +80,12 @@ func (n *Node) readNextMessage(conn net.Conn) ([]byte, error) {
 	for buf.Len() < int(messageLength+4) {
 		n, err := conn.Read(tmp)
 		if err != nil {
-			return nil, err
+			return nil, nil, err
 		}
 		buf.Write(tmp[:n])
 	}
 
-	return buf.Bytes()[4:], nil
+	return buf.Bytes()[4 : messageLength+4], buf.Bytes()[messageLength+4:], nil
 }
 
 // Save the new remote node
@@ -94,9 +97,12 @@ func (n *Node) registerRemote(conn net.Conn) {
 	defer delete(n.remoteNodes, conn.RemoteAddr())
 
 	// Start reading
+	var rest []byte
+	var payload []byte
+	var err error
 
 	for {
-		payload, err := n.readNextMessage(conn)
+		payload, rest, err = n.readNextMessage(conn, rest)
 		switch err {
 		case nil:
 			n.handleData(conn.RemoteAddr().String(), payload)
