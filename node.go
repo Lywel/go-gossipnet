@@ -7,15 +7,16 @@ import (
 	"flag"
 	"github.com/google/logger"
 	"github.com/hashicorp/golang-lru"
-	"io"
 	"io/ioutil"
 	"net"
+	"time"
 )
 
 const (
 	inmemoryPeers          = 40
 	inmemoryMessages       = 1024
 	eventChannelBufferSize = 256
+	readWriteTimeout       = 1
 )
 
 var verbose = flag.Bool("verbose-network", false, "print gossipnet info level logs")
@@ -105,17 +106,19 @@ func (n *Node) registerRemote(conn net.Conn) {
 	var err error
 
 	for {
+		// set a deadline for the full read
+		conn.SetReadDeadline(time.Now().Add(readWriteTimeout * time.Second))
 		payload, rest, err = n.readNextMessage(conn, rest)
-		switch err {
-		case nil:
-			n.handleData(conn.RemoteAddr().String(), payload)
-			continue
-		case io.EOF:
-		default:
+		if err != nil {
+			if err.(net.Error).Timeout() {
+				n.debug.Warningf("%v on %s", err, conn.RemoteAddr())
+				continue
+			}
 			n.debug.Warningf("read error on %s: %v", conn.RemoteAddr(), err)
 			n.emit(ErrorEvent{err})
+			break
 		}
-		break
+		n.handleData(conn.RemoteAddr().String(), payload)
 	}
 	n.debug.Infof("Connection closed with %s", conn.RemoteAddr())
 	n.emit(ConnCloseEvent{conn.RemoteAddr().String()})
