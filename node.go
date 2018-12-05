@@ -68,7 +68,7 @@ func (n *Node) readNextMessage(conn net.Conn, rest []byte) ([]byte, []byte, erro
 	for buf.Len() < 4 {
 		n, err := conn.Read(tmp)
 		if err != nil {
-			return nil, nil, err
+			return nil, buf.Bytes(), err
 		}
 		buf.Write(tmp[:n])
 	}
@@ -80,12 +80,15 @@ func (n *Node) readNextMessage(conn net.Conn, rest []byte) ([]byte, []byte, erro
 	for buf.Len() < int(messageLength+4) {
 		n, err := conn.Read(tmp)
 		if err != nil {
-			return nil, nil, err
+			return nil, buf.Bytes(), err
 		}
 		buf.Write(tmp[:n])
 	}
 
-	return buf.Bytes()[4 : messageLength+4], buf.Bytes()[messageLength+4:], nil
+	payload := buf.Bytes()[4 : messageLength+4]
+	more := buf.Bytes()[messageLength+4:]
+
+	return payload, more, nil
 }
 
 // Save the new remote node
@@ -159,19 +162,35 @@ func (n *Node) Gossip(payload []byte) {
 	n.debug.Infof("Gossip")
 	hash := sha256.Sum256(payload)
 
-	payloadLen := make([]byte, 4)
-	binary.LittleEndian.PutUint32(payloadLen, uint32(len(payload)))
-
 	for addr, conn := range n.remoteNodes {
 		alreadyKnew := n.cacheEventFor(addr.String(), hash)
 		if !alreadyKnew {
 			n.debug.Infof("Gossiping to %s", addr)
-			conn.Write(payloadLen)
-			conn.Write(payload)
+			err := writeMessage(conn, payload)
+			if err != nil {
+				n.debug.Warningf("Write to %s failed: %v", conn.RemoteAddr(), err)
+			}
 		} else {
 			n.debug.Infof("%s already knew :o", addr)
 		}
 	}
+}
+
+func writeMessage(conn net.Conn, msg []byte) error {
+	msgLen := make([]byte, 4)
+	binary.LittleEndian.PutUint32(msgLen, uint32(len(msg)))
+
+	_, err := conn.Write(msgLen)
+	if err != nil {
+		return err
+	}
+
+	_, err = conn.Write(msg)
+	if err != nil {
+		return err
+	}
+
+	return nil
 }
 
 // Broadcast sends a Message to all peers passing selection (including self)
