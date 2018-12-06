@@ -16,7 +16,7 @@ const (
 	inmemoryPeers          = 40
 	inmemoryMessages       = 1024
 	eventChannelBufferSize = 256
-	readWriteTimeout       = 1
+	readWriteTimeout       = 3
 )
 
 var verbose = flag.Bool("verbose-network", false, "print gossipnet info level logs")
@@ -110,11 +110,11 @@ func (n *Node) registerRemote(conn net.Conn) {
 		conn.SetReadDeadline(time.Now().Add(readWriteTimeout * time.Second))
 		payload, rest, err = n.readNextMessage(conn, rest)
 		if err != nil {
-			if err.(net.Error).Timeout() {
-				n.debug.Warningf("%v on %s", err, conn.RemoteAddr())
+			if err.(net.Error) != nil && err.(net.Error).Timeout() {
+				n.debug.Warning(err)
 				continue
 			}
-			n.debug.Warningf("read error on %s: %v", conn.RemoteAddr(), err)
+			n.debug.Errorf("%s: %v", conn.RemoteAddr(), err)
 			n.emit(ErrorEvent{err})
 			break
 		}
