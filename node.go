@@ -111,7 +111,7 @@ func (n *Node) registerRemote(conn net.Conn) {
 		conn.SetReadDeadline(time.Now().Add(readWriteTimeout * time.Second))
 		payload, rest, err = n.readNextMessage(conn, rest)
 		if err != nil {
-			if err.(net.Error) != nil && err.(net.Error).Timeout() {
+			if nerr, ok := err.(net.Error); ok && nerr.Timeout() {
 				// Timeout is okay
 				continue
 			}
@@ -119,6 +119,12 @@ func (n *Node) registerRemote(conn net.Conn) {
 			n.emit(ErrorEvent{err})
 			break
 		}
+
+		// Pass if nothing has been read
+		if len(payload) == 0 {
+			continue
+		}
+
 		n.handleData(conn.RemoteAddr().String(), payload)
 	}
 	n.debug.Infof("Connection closed with %s", conn.RemoteAddr())
