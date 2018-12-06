@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/binary"
+	"errors"
 	"flag"
 	"github.com/google/logger"
 	"github.com/hashicorp/golang-lru"
@@ -27,7 +28,7 @@ type Node struct {
 	remoteAddrs    []string
 	ln             net.Listener
 	running        bool
-	remoteNodes    map[net.Addr]net.Conn
+	remoteNodes    map[string]net.Conn
 	eventChan      chan Event
 	recentMessages *lru.ARCCache // the cache of peer's messages
 	knownMessages  *lru.ARCCache // the cache of self messages
@@ -43,7 +44,7 @@ func New(localAddr string, remoteAddrs []string) *Node {
 		localAddr:      localAddr,
 		remoteAddrs:    remoteAddrs,
 		running:        false,
-		remoteNodes:    make(map[net.Addr]net.Conn),
+		remoteNodes:    make(map[string]net.Conn),
 		eventChan:      make(chan Event, eventChannelBufferSize),
 		recentMessages: recentMessages,
 		knownMessages:  knownMessages,
@@ -69,7 +70,7 @@ func (n *Node) readNextMessage(conn net.Conn, rest []byte) ([]byte, []byte, erro
 	for buf.Len() < 4 {
 		n, err := conn.Read(tmp)
 		if err != nil {
-			return nil, buf.Bytes(), err
+			return nil, nil, err
 		}
 		buf.Write(tmp[:n])
 	}
@@ -81,7 +82,7 @@ func (n *Node) readNextMessage(conn net.Conn, rest []byte) ([]byte, []byte, erro
 	for buf.Len() < int(messageLength+4) {
 		n, err := conn.Read(tmp)
 		if err != nil {
-			return nil, buf.Bytes(), err
+			return nil, nil, err
 		}
 		buf.Write(tmp[:n])
 	}
@@ -95,10 +96,10 @@ func (n *Node) readNextMessage(conn net.Conn, rest []byte) ([]byte, []byte, erro
 // Save the new remote node
 func (n *Node) registerRemote(conn net.Conn) {
 	n.debug.Infof("Connection opened with %s", conn.RemoteAddr())
-	n.remoteNodes[conn.RemoteAddr()] = conn
+	n.remoteNodes[conn.RemoteAddr().String()] = conn
 	n.emit(ConnOpenEvent{conn.RemoteAddr().String()})
 	defer conn.Close()
-	defer delete(n.remoteNodes, conn.RemoteAddr())
+	defer delete(n.remoteNodes, conn.RemoteAddr().String())
 
 	// Start reading
 	var rest []byte
@@ -111,7 +112,7 @@ func (n *Node) registerRemote(conn net.Conn) {
 		payload, rest, err = n.readNextMessage(conn, rest)
 		if err != nil {
 			if err.(net.Error) != nil && err.(net.Error).Timeout() {
-				n.debug.Warning(err)
+				// Timeout is okay
 				continue
 			}
 			n.debug.Errorf("%s: %v", conn.RemoteAddr(), err)
@@ -166,7 +167,7 @@ func (n *Node) Gossip(payload []byte) {
 	hash := sha256.Sum256(payload)
 
 	for addr, conn := range n.remoteNodes {
-		alreadyKnew := n.cacheEventFor(addr.String(), hash)
+		alreadyKnew := n.cacheEventFor(addr, hash)
 		if !alreadyKnew {
 			n.debug.Infof("Gossiping to %s", addr)
 			err := writeMessage(conn, payload)
@@ -260,4 +261,24 @@ func (n *Node) Stop() {
 	}
 	n.emit(CloseEvent{})
 	close(n.eventChan)
+}
+
+// SendTo send a message to a connected peer
+func (n *Node) SendTo(addr string, msg []byte) error {
+	remote, ok := n.remoteNodes[addr]
+	if !ok {
+		return errors.New("Unknown address")
+	}
+
+	return writeMessage(remote, msg)
+}
+
+// RemovePeer closes a connection with a peer
+func (n *Node) RemovePeer(addr string) error {
+	remote, ok := n.remoteNodes[addr]
+	if !ok {
+		return errors.New("Unknown address")
+	}
+
+	return remote.Close()
 }
